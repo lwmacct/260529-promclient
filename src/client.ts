@@ -50,8 +50,6 @@ export class PromClient {
   private readonly fetcher: typeof fetch;
   private readonly headers?: PromClientOptions["headers"];
   private readonly maxGetUrlLength: number;
-  private readonly debug: boolean;
-  private readonly logger: Pick<Console, "info">;
 
   constructor(options: PromClientOptions) {
     if (!options.baseUrl) {
@@ -62,8 +60,6 @@ export class PromClient {
     this.fetcher = options.fetcher ?? ((...args) => globalThis.fetch(...args));
     this.headers = options.headers;
     this.maxGetUrlLength = options.maxGetUrlLength ?? defaultMaxGetUrlLength;
-    this.debug = options.debug ?? false;
-    this.logger = options.logger ?? console;
   }
 
   async query(
@@ -178,14 +174,6 @@ export class PromClient {
 
     if (data.status !== "success") {
       throw new PromParseError("Prometheus response did not include a status.");
-    }
-
-    if (this.debug) {
-      this.logger.info("PromClient query succeeded", {
-        endpoint,
-        method: useGet ? "GET" : "POST",
-        resultType: data.data.resultType,
-      });
     }
 
     return data;

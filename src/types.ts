@@ -106,6 +106,4 @@ export type PromClientOptions = {
   fetcher?: typeof fetch;
   headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
   maxGetUrlLength?: number;
-  debug?: boolean;
-  logger?: Pick<Console, "info">;
 };
