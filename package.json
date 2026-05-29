@@ -1,0 +1,58 @@
+{
+  "name": "@lwmacct/260529-promclient",
+  "version": "0.2.260529",
+  "private": false,
+  "description": "Small Prometheus-compatible HTTP API client with PromQL helpers and response transforms.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
+    },
+    "./promql": {
+      "types": "./dist/promql.d.ts",
+      "import": "./dist/promql.js"
+    },
+    "./time": {
+      "types": "./dist/time.d.ts",
+      "import": "./dist/time.js"
+    },
+    "./transform": {
+      "types": "./dist/transform/index.d.ts",
+      "import": "./dist/transform/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/lwmacct/260529-promclient.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  }
+}
