@@ -30,7 +30,7 @@ jobs:
           npm --version
 
       - name: Install
-        run: npm ci
+        run: npm install --no-package-lock
 
       - name: Sync package version from tag
         if: startsWith(github.ref, 'refs/tags/v')
