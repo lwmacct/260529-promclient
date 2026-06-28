@@ -20,14 +20,33 @@ export type PromFieldRow = {
 
 export type PromFieldValueSource = "auto" | "label" | "sample";
 
+export type PromFieldMapping =
+  | string
+  | false
+  | {
+      as?: string;
+      valueLabel?: string;
+      valueSource?: PromFieldValueSource;
+      sampleParser?: (
+        value: string,
+        item: PromVectorItem,
+      ) => PromFieldValue | undefined;
+    };
+
 export type MapVectorToFieldRowsOptions = {
   indexLabels?: readonly string[];
   keyLabels: readonly string[];
-  fieldLabels: readonly string[];
+  fieldLabels?: readonly string[];
+  field?: string;
   valueLabel?: string;
   valueSource?: PromFieldValueSource;
   labelSeparator?: string;
-  sampleParser?: (value: string, item: PromVectorItem) => PromFieldValue;
+  sampleParser?: (
+    value: string,
+    item: PromVectorItem,
+  ) => PromFieldValue | undefined;
+  fieldMappings?: Record<string, PromFieldMapping>;
+  unknownField?: "keep" | "drop";
 };
 
 export type DuplicateFieldRowStrategy = "last" | "first" | "array" | "error";
@@ -83,13 +102,52 @@ const resolveFieldValue = (
   return options.sampleParser(item.value[1], item);
 };
 
+const resolveFieldMapping = (
+  field: string,
+  options: Pick<MapVectorToFieldRowsOptions, "fieldMappings" | "unknownField">,
+):
+  | {
+      field: string;
+      valueLabel?: string;
+      valueSource?: PromFieldValueSource;
+      sampleParser?: (
+        value: string,
+        item: PromVectorItem,
+      ) => PromFieldValue | undefined;
+    }
+  | undefined => {
+  const mapping = options.fieldMappings?.[field];
+
+  if (mapping === undefined) {
+    return options.unknownField === "drop" ? undefined : { field };
+  }
+
+  if (mapping === false) {
+    return undefined;
+  }
+
+  if (typeof mapping === "string") {
+    return { field: mapping };
+  }
+
+  return {
+    ...mapping,
+    field: mapping.as ?? field,
+  };
+};
+
 export const mapVectorItemToFieldRow = (
   item: PromVectorItem,
   options: MapVectorToFieldRowsOptions,
 ): PromFieldRow | undefined => {
   const labelSeparator = options.labelSeparator ?? defaultLabelSeparator;
   const indexLabels = options.indexLabels ?? [];
-  const valueOptions = {
+  const valueOptions: Required<
+    Pick<
+      MapVectorToFieldRowsOptions,
+      "sampleParser" | "valueLabel" | "valueSource"
+    >
+  > = {
     sampleParser:
       options.sampleParser ??
       ((value: string) => safeParseFloat(value) as PromFieldValue),
@@ -106,21 +164,37 @@ export const mapVectorItemToFieldRow = (
   }
 
   const key = joinLabelValues(item.metric, options.keyLabels, labelSeparator);
-  const field = joinLabelValues(
-    item.metric,
-    options.fieldLabels,
-    labelSeparator,
-  );
-  const value = resolveFieldValue(item, valueOptions);
+  const rawField =
+    options.field ??
+    (options.fieldLabels
+      ? joinLabelValues(item.metric, options.fieldLabels, labelSeparator)
+      : undefined);
 
-  if (key === undefined || field === undefined || value === undefined) {
+  if (key === undefined || rawField === undefined) {
+    return undefined;
+  }
+
+  const fieldMapping = resolveFieldMapping(rawField, options);
+  if (fieldMapping === undefined) {
+    return undefined;
+  }
+
+  const fieldValueOptions = {
+    ...valueOptions,
+    valueLabel: fieldMapping.valueLabel ?? valueOptions.valueLabel,
+    valueSource: fieldMapping.valueSource ?? valueOptions.valueSource,
+    sampleParser: fieldMapping.sampleParser ?? valueOptions.sampleParser,
+  };
+  const value = resolveFieldValue(item, fieldValueOptions);
+
+  if (value === undefined) {
     return undefined;
   }
 
   return {
     index,
     key,
-    field,
+    field: fieldMapping.field,
     value,
     labels: { ...item.metric },
     sampleValue: item.value[1],

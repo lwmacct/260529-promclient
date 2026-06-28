@@ -13,6 +13,7 @@ Small Prometheus-compatible HTTP API client with PromQL helpers and response tra
 - 提供 Prometheus API 响应的 TypeScript 类型
 - 提供 PromQL selector / label matcher 转义工具
 - 提供 vector、matrix、scalar、string 响应转换工具
+- 支持 label 编码 record、字段别名、字段级 value source 和多查询字段合并
 - 无运行时依赖
 
 ## 安装
@@ -238,6 +239,25 @@ const rows = mapVectorToFieldRows(response, {
 // method="GET", status="200" -> field: "GET.200"
 ```
 
+如果字段不是来自 label，而是整个查询对应一个固定字段，可以使用 `field`。这适合把多个查询结果合并成同一批 record：
+
+```ts
+const rows = [
+  ...mapVectorToFieldRows(inResponse, {
+    keyLabels: ["switch", "ifIndex"],
+    field: "inBps",
+    valueSource: "sample",
+  }),
+  ...mapVectorToFieldRows(outResponse, {
+    keyLabels: ["switch", "ifIndex"],
+    field: "outBps",
+    valueSource: "sample",
+  }),
+];
+
+const table = mapFieldRowsByKey(rows);
+```
+
 示例二：`value` label 作为字段值。
 
 这类指标通常用 sample value `1` 表示“这条信息存在”，真正的字段值在 label 中：
@@ -283,6 +303,44 @@ const table = mapFieldRowsByKey(rows);
 // }
 ```
 
+字段名需要转换为业务对象属性时，可以配置 `fieldMappings`。映射值为 `false` 时会丢弃该字段；`unknownField: "drop"` 会丢弃未声明字段：
+
+```ts
+const rows = mapVectorToFieldRows(response, {
+  keyLabels: ["asset"],
+  fieldLabels: ["field"],
+  valueLabel: "value",
+  valueSource: "label",
+  unknownField: "drop",
+  fieldMappings: {
+    region: "region",
+    owner: "owner",
+    ignored_field: false,
+  },
+});
+```
+
+字段级配置可以覆盖全局 `valueSource`、`valueLabel` 和 `sampleParser`。这适合部分字段值在 label 中、部分字段值在 sample 中的指标：
+
+```ts
+const rows = mapVectorToFieldRows(response, {
+  keyLabels: ["asset"],
+  fieldLabels: ["field"],
+  valueSource: "label",
+  valueLabel: "value",
+  unknownField: "drop",
+  fieldMappings: {
+    model_number: { as: "modelNumber" },
+    firmware: { as: "firmware" },
+    total_bytes: {
+      as: "totalBytes",
+      valueSource: "sample",
+      sampleParser: (value) => Number.parseFloat(value),
+    },
+  },
+});
+```
+
 `valueSource` 支持：
 
 | 值 | 说明 |
@@ -308,6 +366,7 @@ import {
   getScalarNumber,
   mapVector,
   mapVectorByLabel,
+  mapVectorByLabelAndName,
 } from "@lwmacct/260529-promclient";
 ```
 
@@ -319,7 +378,22 @@ import {
 | `getScalarValue(response)` | 从 scalar/string response 中取出原始字符串值 |
 | `getScalarNumber(response, defaultValue?)` | 从 scalar response 中解析数字 |
 | `mapVectorByLabel(response, labelName, parser?)` | 按指定 label 聚合 vector 数值 |
+| `mapVectorByLabelAndName(response, labelName, mapper, parser?)` | 按指定 label 聚合，并用 `__name__` 区分字段 |
 | `mapVector(response, mapper)` | 自定义映射 vector items |
+
+`mapVectorByLabelAndName` 适合多个 metric name 共同组成一张对象表的场景：
+
+```ts
+const stats = mapVectorByLabelAndName(response, "instance", (name, value, prev) => {
+  if (name === "node_memory_MemTotal_bytes") {
+    return { ...prev, total: value };
+  }
+  if (name === "node_memory_MemAvailable_bytes") {
+    return { ...prev, available: value };
+  }
+  return prev;
+});
+```
 
 ### Range Response
 
