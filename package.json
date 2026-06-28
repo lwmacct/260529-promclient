@@ -1,6 +1,6 @@
 {
   "name": "@lwmacct/260529-promclient",
-  "version": "0.14.260628",
+  "version": "0.15.260628",
   "private": false,
   "description": "Small Prometheus-compatible HTTP API client with PromQL helpers and response transforms.",
   "type": "module",

@@ -176,6 +176,129 @@ const time = serializeTime(new Date());
 
 Prometheus 的 sample value 是字符串。转换工具会在需要时解析为 number，并过滤 `NaN`。
 
+### Label Record Transform
+
+有些指标会把表格结构编码到 labels 中，例如用某些 labels 表示 `index`、`key`、`field`，再用 sample value 或 `value` label 表示字段值。可以用 `mapVectorToFieldRows` 先转成标准行，再按 key 或 index/key pivot 成对象表。
+
+示例一：sample value 作为字段值。
+
+假设查询返回这些 vector samples：
+
+```promql
+demo_service_quota{tenant="acme", service="api", resource="cpu"} 4
+demo_service_quota{tenant="acme", service="api", resource="memory_gb"} 16
+demo_service_quota{tenant="acme", service="worker", resource="cpu"} 2
+```
+
+可以把它理解为：
+
+| index | key | field | value |
+| --- | --- | --- | --- |
+| `acme` | `api` | `cpu` | `4` |
+| `acme` | `api` | `memory_gb` | `16` |
+| `acme` | `worker` | `cpu` | `2` |
+
+```ts
+import {
+  mapFieldRowsByIndexKey,
+  mapVectorToFieldRows,
+} from "@lwmacct/260529-promclient";
+
+const response = await client.query("demo_service_quota");
+
+const rows = mapVectorToFieldRows(response, {
+  indexLabels: ["tenant"],
+  keyLabels: ["service"],
+  fieldLabels: ["resource"],
+  valueSource: "sample",
+});
+
+const table = mapFieldRowsByIndexKey(rows);
+// {
+//   acme: {
+//     api: {
+//       cpu: 4,
+//       memory_gb: 16
+//     },
+//     worker: {
+//       cpu: 2
+//     }
+//   }
+// }
+```
+
+如果字段由多个 label 共同决定，可以把多个 label 组合成字段名：
+
+```ts
+const rows = mapVectorToFieldRows(response, {
+  indexLabels: ["tenant"],
+  keyLabels: ["service"],
+  fieldLabels: ["method", "status"],
+});
+// method="GET", status="200" -> field: "GET.200"
+```
+
+示例二：`value` label 作为字段值。
+
+这类指标通常用 sample value `1` 表示“这条信息存在”，真正的字段值在 label 中：
+
+```promql
+demo_asset_info{asset="srv-01", field="region", value="us-east"} 1
+demo_asset_info{asset="srv-01", field="owner", value="platform"} 1
+demo_asset_info{asset="srv-02", field="region", value="eu-west"} 1
+```
+
+可以把它理解为：
+
+| key | field | value |
+| --- | --- | --- |
+| `srv-01` | `region` | `us-east` |
+| `srv-01` | `owner` | `platform` |
+| `srv-02` | `region` | `eu-west` |
+
+```ts
+import {
+  mapFieldRowsByKey,
+  mapVectorToFieldRows,
+} from "@lwmacct/260529-promclient";
+
+const response = await client.query("demo_asset_info");
+
+const rows = mapVectorToFieldRows(response, {
+  keyLabels: ["asset"],
+  fieldLabels: ["field"],
+  valueLabel: "value",
+  valueSource: "auto",
+});
+
+const table = mapFieldRowsByKey(rows);
+// {
+//   "srv-01": {
+//     region: "us-east",
+//     owner: "platform"
+//   },
+//   "srv-02": {
+//     region: "eu-west"
+//   }
+// }
+```
+
+`valueSource` 支持：
+
+| 值 | 说明 |
+| --- | --- |
+| `"auto"` | 优先读取 `valueLabel` 指定的 label；不存在时读取 sample value，默认值 |
+| `"label"` | 只读取 `valueLabel` 指定的 label |
+| `"sample"` | 只读取 Prometheus sample value |
+
+重复字段默认采用后出现的值。需要保留第一条、保留数组或发现重复时报错时，可以配置 pivot 函数：
+
+```ts
+mapFieldRowsByKey(rows, { duplicate: "first" });
+mapFieldRowsByKey(rows, { duplicate: "array" });
+mapFieldRowsByKey(rows, { duplicate: "error" });
+```
+
 ### Instant Response
 
 ```ts
