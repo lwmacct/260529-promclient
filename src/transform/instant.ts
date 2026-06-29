@@ -59,34 +59,6 @@ export const mapVectorByLabel = (
   }, {});
 };
 
-export const mapVectorByLabelAndName = <T extends Record<string, unknown>>(
-  response: PromSuccessResponse<PromInstantData>,
-  labelName: string,
-  mapper: (metricName: string, value: number, previous: T) => T,
-  parser: (value: string) => number = (value) => safeParseFloat(value),
-): Record<string, T> => {
-  if (!isVectorData(response.data)) {
-    return {};
-  }
-
-  return response.data.result.reduce<Record<string, T>>((result, item) => {
-    const labelValue = item.metric[labelName];
-    const metricName = item.metric.__name__;
-    if (!labelValue || !metricName) {
-      return result;
-    }
-
-    const value = parser(item.value[1]);
-    if (Number.isNaN(value)) {
-      return result;
-    }
-
-    const previous = result[labelValue] ?? ({} as T);
-    result[labelValue] = mapper(metricName, value, previous);
-    return result;
-  }, {});
-};
-
 export const mapVector = <T>(
   response: PromSuccessResponse<PromVectorData>,
   mapper: (item: PromVectorItem) => T | undefined,

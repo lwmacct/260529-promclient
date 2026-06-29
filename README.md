@@ -177,13 +177,11 @@ const time = serializeTime(new Date());
 
 Prometheus 的 sample value 是字符串。转换工具会在需要时解析为 number，并过滤 `NaN`。
 
-### Label Record Transform
+### Record Schema Transform
 
-有些指标会把表格结构编码到 labels 中，例如用某些 labels 表示 `index`、`key`、`field`，再用 sample value 或 `value` label 表示字段值。可以用 `mapVectorToFieldRows` 先转成标准行，再按 key 或 index/key pivot 成对象表。
+有些指标会把表格结构编码到 labels 中，例如用某些 labels 表示 record key、field name，并用 sample value 或某个 label 表示字段值。`mapVectorToRecords` 和 `mapVectorToRecordMap` 使用 schema 直接把 vector 转成对象，不再暴露中间 field rows。
 
 示例一：sample value 作为字段值。
-
-假设查询返回这些 vector samples：
 
 ```promql
 demo_service_quota{tenant="acme", service="api", resource="cpu"} 4
@@ -191,76 +189,38 @@ demo_service_quota{tenant="acme", service="api", resource="memory_gb"} 16
 demo_service_quota{tenant="acme", service="worker", resource="cpu"} 2
 ```
 
-可以把它理解为：
-
-| index | key | field | value |
-| --- | --- | --- | --- |
-| `acme` | `api` | `cpu` | `4` |
-| `acme` | `api` | `memory_gb` | `16` |
-| `acme` | `worker` | `cpu` | `2` |
-
 ```ts
 import {
-  mapFieldRowsByIndexKey,
-  mapVectorToFieldRows,
+  label,
+  labels,
+  mapVectorToRecords,
+  numberSample,
 } from "@lwmacct/260529-promclient";
 
-const response = await client.query("demo_service_quota");
+type ServiceQuota = {
+  key: string;
+  tenant: string;
+  service: string;
+  cpu?: number;
+  memoryGb?: number;
+};
 
-const rows = mapVectorToFieldRows(response, {
-  indexLabels: ["tenant"],
-  keyLabels: ["service"],
-  fieldLabels: ["resource"],
-  valueSource: "sample",
+const rows = mapVectorToRecords<ServiceQuota>(response, {
+  key: labels(["tenant", "service"]),
+  field: label("resource"),
+  base: {
+    key: labels(["tenant", "service"]),
+    tenant: label("tenant"),
+    service: label("service"),
+  },
+  fields: {
+    cpu: numberSample("cpu"),
+    memory_gb: numberSample("memoryGb"),
+  },
 });
-
-const table = mapFieldRowsByIndexKey(rows);
-// {
-//   acme: {
-//     api: {
-//       cpu: 4,
-//       memory_gb: 16
-//     },
-//     worker: {
-//       cpu: 2
-//     }
-//   }
-// }
 ```
 
-如果字段由多个 label 共同决定，可以把多个 label 组合成字段名：
-
-```ts
-const rows = mapVectorToFieldRows(response, {
-  indexLabels: ["tenant"],
-  keyLabels: ["service"],
-  fieldLabels: ["method", "status"],
-});
-// method="GET", status="200" -> field: "GET.200"
-```
-
-如果字段不是来自 label，而是整个查询对应一个固定字段，可以使用 `field`。这适合把多个查询结果合并成同一批 record：
-
-```ts
-const rows = [
-  ...mapVectorToFieldRows(inResponse, {
-    keyLabels: ["switch", "ifIndex"],
-    field: "inBps",
-    valueSource: "sample",
-  }),
-  ...mapVectorToFieldRows(outResponse, {
-    keyLabels: ["switch", "ifIndex"],
-    field: "outBps",
-    valueSource: "sample",
-  }),
-];
-
-const table = mapFieldRowsByKey(rows);
-```
-
-示例二：`value` label 作为字段值。
-
-这类指标通常用 sample value `1` 表示“这条信息存在”，真正的字段值在 label 中：
+示例二：字段值来自 label。
 
 ```promql
 demo_asset_info{asset="srv-01", field="region", value="us-east"} 1
@@ -268,93 +228,152 @@ demo_asset_info{asset="srv-01", field="owner", value="platform"} 1
 demo_asset_info{asset="srv-02", field="region", value="eu-west"} 1
 ```
 
-可以把它理解为：
+```ts
+import {
+  label,
+  labelValue,
+  mapVectorToRecordMap,
+} from "@lwmacct/260529-promclient";
 
-| key | field | value |
-| --- | --- | --- |
-| `srv-01` | `region` | `us-east` |
-| `srv-01` | `owner` | `platform` |
-| `srv-02` | `region` | `eu-west` |
+type AssetInfo = {
+  asset: string;
+  region?: string;
+  owner?: string;
+};
+
+const table = mapVectorToRecordMap<AssetInfo>(response, {
+  key: label("asset"),
+  field: label("field"),
+  base: {
+    asset: label("asset"),
+  },
+  fields: {
+    region: labelValue("region", "value"),
+    owner: labelValue("owner", "value"),
+  },
+});
+```
+
+示例三：部分字段来自 label，部分字段来自 sample。
 
 ```ts
 import {
-  mapFieldRowsByKey,
-  mapVectorToFieldRows,
+  autoValue,
+  label,
+  labelValue,
+  labels,
+  mapVectorToRecords,
+  numberSample,
 } from "@lwmacct/260529-promclient";
 
-const response = await client.query("demo_asset_info");
+type DiskInfo = {
+  key: string;
+  host: string;
+  serialNumber: string;
+  modelNumber?: string;
+  namespace?: string;
+  totalBytes?: number;
+};
 
-const rows = mapVectorToFieldRows(response, {
-  keyLabels: ["asset"],
-  fieldLabels: ["field"],
-  valueLabel: "value",
-  valueSource: "auto",
-});
-
-const table = mapFieldRowsByKey(rows);
-// {
-//   "srv-01": {
-//     region: "us-east",
-//     owner: "platform"
-//   },
-//   "srv-02": {
-//     region: "eu-west"
-//   }
-// }
-```
-
-字段名需要转换为业务对象属性时，可以配置 `fieldMappings`。映射值为 `false` 时会丢弃该字段；`unknownField: "drop"` 会丢弃未声明字段：
-
-```ts
-const rows = mapVectorToFieldRows(response, {
-  keyLabels: ["asset"],
-  fieldLabels: ["field"],
-  valueLabel: "value",
-  valueSource: "label",
-  unknownField: "drop",
-  fieldMappings: {
-    region: "region",
-    owner: "owner",
-    ignored_field: false,
+const disks = mapVectorToRecords<DiskInfo>(response, {
+  key: labels(["host", "serial"]),
+  field: label("field"),
+  base: {
+    key: labels(["host", "serial"]),
+    host: label("host"),
+    serialNumber: label("serial"),
+  },
+  fields: {
+    model_number: labelValue("modelNumber", "value"),
+    namespace: autoValue("namespace", "value"),
+    total_bytes: numberSample("totalBytes"),
   },
 });
 ```
 
-字段级配置可以覆盖全局 `valueSource`、`valueLabel` 和 `sampleParser`。这适合部分字段值在 label 中、部分字段值在 sample 中的指标：
+示例四：字段来自 metric name。
 
 ```ts
-const rows = mapVectorToFieldRows(response, {
-  keyLabels: ["asset"],
-  fieldLabels: ["field"],
-  valueSource: "label",
-  valueLabel: "value",
-  unknownField: "drop",
-  fieldMappings: {
-    model_number: { as: "modelNumber" },
-    firmware: { as: "firmware" },
-    total_bytes: {
-      as: "totalBytes",
-      valueSource: "sample",
-      sampleParser: (value) => Number.parseFloat(value),
+import {
+  label,
+  mapVectorToRecordMap,
+  metricName,
+  numberSample,
+} from "@lwmacct/260529-promclient";
+
+type MemoryStats = {
+  total?: number;
+  available?: number;
+};
+
+const stats = mapVectorToRecordMap<MemoryStats>(response, {
+  key: label("instance"),
+  field: metricName(),
+  fields: {
+    node_memory_MemTotal_bytes: numberSample("total"),
+    node_memory_MemAvailable_bytes: numberSample("available"),
+  },
+});
+```
+
+多个查询结果需要合并成同一批 records 时，可以使用 `mergeVectorRecords`。每个输入可以有独立 schema，只要 key 相同就会合并到同一个对象。
+
+```ts
+import {
+  constant,
+  label,
+  labels,
+  mergeVectorRecords,
+  numberSample,
+} from "@lwmacct/260529-promclient";
+
+type PortTraffic = {
+  key: string;
+  switchId: string;
+  ifIndex: string;
+  inBps?: number;
+  outBps?: number;
+};
+
+const base = {
+  key: labels(["switch", "ifIndex"]),
+  switchId: label("switch"),
+  ifIndex: label("ifIndex"),
+};
+
+const rows = mergeVectorRecords<PortTraffic>([
+  {
+    response: inResponse,
+    schema: {
+      key: labels(["switch", "ifIndex"]),
+      field: constant("inBps"),
+      base,
+      fields: { inBps: numberSample("inBps") },
     },
   },
-});
+  {
+    response: outResponse,
+    schema: {
+      key: labels(["switch", "ifIndex"]),
+      field: constant("outBps"),
+      base,
+      fields: { outBps: numberSample("outBps") },
+    },
+  },
+]);
 ```
 
-`valueSource` 支持：
-
-| 值 | 说明 |
-| --- | --- |
-| `"auto"` | 优先读取 `valueLabel` 指定的 label；不存在时读取 sample value，默认值 |
-| `"label"` | 只读取 `valueLabel` 指定的 label |
-| `"sample"` | 只读取 Prometheus sample value |
-
-重复字段默认采用后出现的值。需要保留第一条、保留数组或发现重复时报错时，可以配置 pivot 函数：
+重复字段默认采用后出现的值。可以在 schema 或字段规则中配置：
 
 ```ts
-mapFieldRowsByKey(rows, { duplicate: "first" });
-mapFieldRowsByKey(rows, { duplicate: "array" });
-mapFieldRowsByKey(rows, { duplicate: "error" });
+const rows = mapVectorToRecords(response, {
+  key: label("asset"),
+  field: label("field"),
+  duplicate: "first",
+  fields: {
+    owner: labelValue("owner", "value", { duplicate: "error" }),
+  },
+});
 ```
 
 ### Instant Response
@@ -366,7 +385,6 @@ import {
   getScalarNumber,
   mapVector,
   mapVectorByLabel,
-  mapVectorByLabelAndName,
 } from "@lwmacct/260529-promclient";
 ```
 
@@ -378,22 +396,7 @@ import {
 | `getScalarValue(response)` | 从 scalar/string response 中取出原始字符串值 |
 | `getScalarNumber(response, defaultValue?)` | 从 scalar response 中解析数字 |
 | `mapVectorByLabel(response, labelName, parser?)` | 按指定 label 聚合 vector 数值 |
-| `mapVectorByLabelAndName(response, labelName, mapper, parser?)` | 按指定 label 聚合，并用 `__name__` 区分字段 |
 | `mapVector(response, mapper)` | 自定义映射 vector items |
-
-`mapVectorByLabelAndName` 适合多个 metric name 共同组成一张对象表的场景：
-
-```ts
-const stats = mapVectorByLabelAndName(response, "instance", (name, value, prev) => {
-  if (name === "node_memory_MemTotal_bytes") {
-    return { ...prev, total: value };
-  }
-  if (name === "node_memory_MemAvailable_bytes") {
-    return { ...prev, available: value };
-  }
-  return prev;
-});
-```
 
 ### Range Response
 

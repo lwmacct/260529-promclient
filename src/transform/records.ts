@@ -1,233 +1,55 @@
 import type {
   PromInstantData,
-  PromLabelSet,
   PromVectorItem,
   PromSuccessResponse,
 } from "../types";
-import { isVectorData, safeParseFloat, toMilliseconds } from "./core";
+import { isVectorData, safeParseFloat } from "./core";
 
-export type PromFieldValue = string | number;
+export type PromRecordValue = string | number | boolean | null;
 
-export type PromFieldRow = {
-  index?: string;
-  key: string;
+export type PromRecordValueResolver<TValue = PromRecordValue> = (
+  item: PromVectorItem,
+) => TValue | undefined;
+
+export type DuplicateRecordFieldStrategy =
+  | "last"
+  | "first"
+  | "array"
+  | "error";
+
+export type PromRecordFieldRule = {
   field: string;
-  value: PromFieldValue;
-  labels: PromLabelSet;
-  sampleValue: string;
-  timestampMs: number;
+  value: PromRecordValueResolver;
+  duplicate?: DuplicateRecordFieldStrategy;
 };
 
-export type PromFieldValueSource = "auto" | "label" | "sample";
-
-export type PromFieldMapping =
-  | string
-  | false
-  | {
-      as?: string;
-      valueLabel?: string;
-      valueSource?: PromFieldValueSource;
-      sampleParser?: (
-        value: string,
-        item: PromVectorItem,
-      ) => PromFieldValue | undefined;
-    };
-
-export type MapVectorToFieldRowsOptions = {
-  indexLabels?: readonly string[];
-  keyLabels: readonly string[];
-  fieldLabels?: readonly string[];
-  field?: string;
-  valueLabel?: string;
-  valueSource?: PromFieldValueSource;
-  labelSeparator?: string;
-  sampleParser?: (
-    value: string,
-    item: PromVectorItem,
-  ) => PromFieldValue | undefined;
-  fieldMappings?: Record<string, PromFieldMapping>;
-  unknownField?: "keep" | "drop";
+export type PromRecordBaseSchema<TRecord extends Record<string, unknown>> = {
+  [K in keyof TRecord]?: PromRecordValueResolver<TRecord[K]>;
 };
 
-export type DuplicateFieldRowStrategy = "last" | "first" | "array" | "error";
-
-export type MapFieldRowsOptions = {
-  duplicate?: DuplicateFieldRowStrategy;
+export type PromRecordSchema<TRecord extends Record<string, unknown>> = {
+  key: PromRecordValueResolver<string>;
+  field: PromRecordValueResolver<string>;
+  base?: PromRecordBaseSchema<TRecord>;
+  fields: Record<string, PromRecordFieldRule | readonly PromRecordFieldRule[]>;
+  duplicate?: DuplicateRecordFieldStrategy;
+  unknownField?: "drop" | "error";
 };
 
-export type PromFieldRecord = Record<string, PromFieldValue | PromFieldValue[]>;
-
-export type PromFieldTable = Record<string, PromFieldRecord>;
-
-export type PromIndexedFieldTable = Record<string, PromFieldTable>;
-
-const defaultLabelSeparator = ".";
-const defaultValueLabel = "value";
-
-const joinLabelValues = (
-  labels: PromLabelSet,
-  labelNames: readonly string[],
-  separator: string,
-): string | undefined => {
-  const values: string[] = [];
-  for (const labelName of labelNames) {
-    const value = labels[labelName];
-    if (value === undefined) {
-      return undefined;
-    }
-    values.push(value);
-  }
-  return values.join(separator);
+export type MergeVectorRecordsInput<TRecord extends Record<string, unknown>> = {
+  response: PromSuccessResponse<PromInstantData>;
+  schema: PromRecordSchema<TRecord>;
 };
 
-const resolveFieldValue = (
-  item: PromVectorItem,
-  options: Required<
-    Pick<
-      MapVectorToFieldRowsOptions,
-      "sampleParser" | "valueLabel" | "valueSource"
-    >
-  >,
-): PromFieldValue | undefined => {
-  const labelValue = item.metric[options.valueLabel];
-
-  if (options.valueSource === "label") {
-    return labelValue;
-  }
-
-  if (options.valueSource === "auto" && labelValue !== undefined) {
-    return labelValue;
-  }
-
-  return options.sampleParser(item.value[1], item);
-};
-
-const resolveFieldMapping = (
+const setRecordField = <TRecord extends Record<string, unknown>>(
+  record: TRecord,
   field: string,
-  options: Pick<MapVectorToFieldRowsOptions, "fieldMappings" | "unknownField">,
-):
-  | {
-      field: string;
-      valueLabel?: string;
-      valueSource?: PromFieldValueSource;
-      sampleParser?: (
-        value: string,
-        item: PromVectorItem,
-      ) => PromFieldValue | undefined;
-    }
-  | undefined => {
-  const mapping = options.fieldMappings?.[field];
-
-  if (mapping === undefined) {
-    return options.unknownField === "drop" ? undefined : { field };
-  }
-
-  if (mapping === false) {
-    return undefined;
-  }
-
-  if (typeof mapping === "string") {
-    return { field: mapping };
-  }
-
-  return {
-    ...mapping,
-    field: mapping.as ?? field,
-  };
-};
-
-export const mapVectorItemToFieldRow = (
-  item: PromVectorItem,
-  options: MapVectorToFieldRowsOptions,
-): PromFieldRow | undefined => {
-  const labelSeparator = options.labelSeparator ?? defaultLabelSeparator;
-  const indexLabels = options.indexLabels ?? [];
-  const valueOptions: Required<
-    Pick<
-      MapVectorToFieldRowsOptions,
-      "sampleParser" | "valueLabel" | "valueSource"
-    >
-  > = {
-    sampleParser:
-      options.sampleParser ??
-      ((value: string) => safeParseFloat(value) as PromFieldValue),
-    valueLabel: options.valueLabel ?? defaultValueLabel,
-    valueSource: options.valueSource ?? "auto",
-  };
-
-  const index =
-    indexLabels.length > 0
-      ? joinLabelValues(item.metric, indexLabels, labelSeparator)
-      : undefined;
-  if (indexLabels.length > 0 && index === undefined) {
-    return undefined;
-  }
-
-  const key = joinLabelValues(item.metric, options.keyLabels, labelSeparator);
-  const rawField =
-    options.field ??
-    (options.fieldLabels
-      ? joinLabelValues(item.metric, options.fieldLabels, labelSeparator)
-      : undefined);
-
-  if (key === undefined || rawField === undefined) {
-    return undefined;
-  }
-
-  const fieldMapping = resolveFieldMapping(rawField, options);
-  if (fieldMapping === undefined) {
-    return undefined;
-  }
-
-  const fieldValueOptions = {
-    ...valueOptions,
-    valueLabel: fieldMapping.valueLabel ?? valueOptions.valueLabel,
-    valueSource: fieldMapping.valueSource ?? valueOptions.valueSource,
-    sampleParser: fieldMapping.sampleParser ?? valueOptions.sampleParser,
-  };
-  const value = resolveFieldValue(item, fieldValueOptions);
-
-  if (value === undefined) {
-    return undefined;
-  }
-
-  return {
-    index,
-    key,
-    field: fieldMapping.field,
-    value,
-    labels: { ...item.metric },
-    sampleValue: item.value[1],
-    timestampMs: toMilliseconds(item.value[0]),
-  };
-};
-
-export const mapVectorToFieldRows = (
-  response: PromSuccessResponse<PromInstantData>,
-  options: MapVectorToFieldRowsOptions,
-): PromFieldRow[] => {
-  if (!isVectorData(response.data)) {
-    return [];
-  }
-
-  return response.data.result.reduce<PromFieldRow[]>((rows, item) => {
-    const row = mapVectorItemToFieldRow(item, options);
-    if (row !== undefined) {
-      rows.push(row);
-    }
-    return rows;
-  }, []);
-};
-
-const setFieldValue = (
-  record: PromFieldRecord,
-  field: string,
-  value: PromFieldValue,
-  duplicate: DuplicateFieldRowStrategy,
+  value: PromRecordValue,
+  duplicate: DuplicateRecordFieldStrategy,
 ) => {
   const current = record[field];
   if (current === undefined) {
-    record[field] = value;
+    record[field as keyof TRecord] = value as TRecord[keyof TRecord];
     return;
   }
 
@@ -236,51 +58,194 @@ const setFieldValue = (
   }
 
   if (duplicate === "last") {
-    record[field] = value;
+    record[field as keyof TRecord] = value as TRecord[keyof TRecord];
     return;
   }
 
   if (duplicate === "array") {
-    record[field] = Array.isArray(current)
-      ? [...current, value]
-      : [current, value];
+    record[field as keyof TRecord] = (
+      Array.isArray(current) ? [...current, value] : [current, value]
+    ) as TRecord[keyof TRecord];
     return;
   }
 
-  throw new Error(`Duplicate field row for field "${field}".`);
+  throw new Error(`Duplicate record field "${field}".`);
 };
 
-export const mapFieldRowsByKey = (
-  rows: readonly PromFieldRow[],
-  options: MapFieldRowsOptions = {},
-): PromFieldTable => {
-  const duplicate = options.duplicate ?? "last";
+const applyBase = <TRecord extends Record<string, unknown>>(
+  record: TRecord,
+  item: PromVectorItem,
+  schema?: PromRecordBaseSchema<TRecord>,
+) => {
+  if (!schema) {
+    return;
+  }
 
-  return rows.reduce<PromFieldTable>((table, row) => {
-    const record = table[row.key] ?? {};
-    setFieldValue(record, row.field, row.value, duplicate);
-    table[row.key] = record;
-    return table;
-  }, {});
+  for (const [field, resolver] of Object.entries(schema)) {
+    if (record[field] !== undefined || !resolver) {
+      continue;
+    }
+    const value = resolver(item);
+    if (value !== undefined) {
+      record[field as keyof TRecord] = value as TRecord[keyof TRecord];
+    }
+  }
 };
 
-export const mapFieldRowsByIndexKey = (
-  rows: readonly PromFieldRow[],
-  options: MapFieldRowsOptions = {},
-): PromIndexedFieldTable => {
-  const duplicate = options.duplicate ?? "last";
+const getFieldRules = <TRecord extends Record<string, unknown>>(
+  rawField: string,
+  schema: PromRecordSchema<TRecord>,
+) => {
+  const rules = schema.fields[rawField];
+  if (rules === undefined) {
+    if (schema.unknownField === "error") {
+      throw new Error(`Unknown record field "${rawField}".`);
+    }
+    return [];
+  }
+  return Array.isArray(rules) ? rules : [rules];
+};
 
-  return rows.reduce<PromIndexedFieldTable>((table, row) => {
-    const index = row.index;
-    if (index === undefined) {
-      return table;
+export const mapVectorToRecordMap = <TRecord extends Record<string, unknown>>(
+  response: PromSuccessResponse<PromInstantData>,
+  schema: PromRecordSchema<TRecord>,
+): Record<string, TRecord> => {
+  if (!isVectorData(response.data)) {
+    return {};
+  }
+
+  return response.data.result.reduce<Record<string, TRecord>>((records, item) => {
+    const key = schema.key(item);
+    const rawField = schema.field(item);
+    if (key === undefined || rawField === undefined) {
+      return records;
     }
 
-    const records = table[index] ?? {};
-    const record = records[row.key] ?? {};
-    setFieldValue(record, row.field, row.value, duplicate);
-    records[row.key] = record;
-    table[index] = records;
-    return table;
+    const rules = getFieldRules(rawField, schema);
+    if (rules.length === 0) {
+      return records;
+    }
+
+    const record = records[key] ?? ({} as TRecord);
+    applyBase(record, item, schema.base);
+
+    for (const rule of rules) {
+      const value = rule.value(item);
+      if (value !== undefined) {
+        setRecordField(
+          record,
+          rule.field,
+          value,
+          rule.duplicate ?? schema.duplicate ?? "last",
+        );
+      }
+    }
+
+    records[key] = record;
+    return records;
   }, {});
 };
+
+export const mapVectorToRecords = <TRecord extends Record<string, unknown>>(
+  response: PromSuccessResponse<PromInstantData>,
+  schema: PromRecordSchema<TRecord>,
+): TRecord[] => Object.values(mapVectorToRecordMap(response, schema));
+
+export const mergeVectorRecords = <TRecord extends Record<string, unknown>>(
+  inputs: readonly MergeVectorRecordsInput<TRecord>[],
+): TRecord[] => {
+  const records: Record<string, TRecord> = {};
+
+  for (const input of inputs) {
+    Object.entries(mapVectorToRecordMap(input.response, input.schema)).forEach(
+      ([key, record]) => {
+        records[key] = { ...(records[key] ?? {}), ...record };
+      },
+    );
+  }
+
+  return Object.values(records);
+};
+
+export const label =
+  (name: string): PromRecordValueResolver<string> =>
+  (item) =>
+    item.metric[name];
+
+export const labels =
+  (
+    names: readonly string[],
+    separator = "\u0000",
+  ): PromRecordValueResolver<string> =>
+  (item) => {
+    const values: string[] = [];
+    for (const name of names) {
+      const value = item.metric[name];
+      if (value === undefined) {
+        return undefined;
+      }
+      values.push(value);
+    }
+    return values.join(separator);
+  };
+
+export const metricName = (): PromRecordValueResolver<string> => (item) =>
+  item.metric.__name__;
+
+export const constant =
+  <TValue extends PromRecordValue>(
+    value: TValue,
+  ): PromRecordValueResolver<TValue> =>
+  () =>
+    value;
+
+export const sample =
+  <TRecord extends Record<string, unknown>>(
+    field: keyof TRecord | string,
+    options: { duplicate?: DuplicateRecordFieldStrategy } = {},
+  ): PromRecordFieldRule => ({
+    field: String(field),
+    value: (item) => item.value[1],
+    duplicate: options.duplicate,
+  });
+
+export const numberSample =
+  <TRecord extends Record<string, unknown>>(
+    field: keyof TRecord | string,
+    options: {
+      duplicate?: DuplicateRecordFieldStrategy;
+      defaultValue?: number;
+    } = {},
+  ): PromRecordFieldRule => ({
+    field: String(field),
+    value: (item) => {
+      const value = safeParseFloat(item.value[1], Number.NaN);
+      if (Number.isNaN(value)) {
+        return options.defaultValue;
+      }
+      return value;
+    },
+    duplicate: options.duplicate,
+  });
+
+export const labelValue =
+  <TRecord extends Record<string, unknown>>(
+    field: keyof TRecord | string,
+    labelName: string,
+    options: { duplicate?: DuplicateRecordFieldStrategy } = {},
+  ): PromRecordFieldRule => ({
+    field: String(field),
+    value: (item) => item.metric[labelName],
+    duplicate: options.duplicate,
+  });
+
+export const autoValue =
+  <TRecord extends Record<string, unknown>>(
+    field: keyof TRecord | string,
+    labelName: string,
+    options: { duplicate?: DuplicateRecordFieldStrategy } = {},
+  ): PromRecordFieldRule => ({
+    field: String(field),
+    value: (item) => item.metric[labelName] ?? item.value[1],
+    duplicate: options.duplicate,
+  });
