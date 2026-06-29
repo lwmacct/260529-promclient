@@ -1,4 +1,4 @@
-import type { PromErrorResponse } from "./types";
+import type { PromErrorResponse } from "../model/index.js";
 
 export class PromClientError extends Error {
   constructor(message: string, options?: ErrorOptions) {

@@ -5,13 +5,19 @@ import type {
   PromSuccessResponse,
   PromVectorData,
   PromVectorItem,
-} from "../types";
+} from "../model/index.js";
 import {
-  isScalarData,
-  isStringData,
-  isVectorData,
-  safeParseFloat,
-} from "./core";
+  applyDuplicateValue,
+  type DuplicateValue,
+  type DuplicateValueStrategy,
+} from "./duplicate.js";
+import { isScalarData, isStringData, isVectorData } from "./guards.js";
+import { safeParseFloat } from "./numeric.js";
+
+export type LabelMapOptions<TStrategy extends DuplicateValueStrategy = "last"> =
+  {
+    duplicate?: TStrategy;
+  };
 
 export const getVectorItems = (
   response: PromSuccessResponse<PromInstantData>,
@@ -23,7 +29,7 @@ export const getVectorItems = (
 };
 
 export const getScalarValue = (
-  response: PromSuccessResponse<PromScalarData | PromStringData>,
+  response: PromSuccessResponse<PromInstantData>,
 ): string | undefined => {
   if (!isScalarData(response.data) && !isStringData(response.data)) {
     return undefined;
@@ -32,7 +38,7 @@ export const getScalarValue = (
 };
 
 export const getScalarNumber = (
-  response: PromSuccessResponse<PromScalarData>,
+  response: PromSuccessResponse<PromScalarData | PromStringData>,
   defaultValue = Number.NaN,
 ): number => {
   const value = getScalarValue(response);
@@ -41,32 +47,49 @@ export const getScalarNumber = (
     : safeParseFloat(value, defaultValue);
 };
 
-export const mapVectorByLabel = (
+export const mapVectorByLabel = <
+  TStrategy extends DuplicateValueStrategy = "last",
+>(
   response: PromSuccessResponse<PromVectorData>,
   labelName: string,
   parser: (value: string) => number = (value) => safeParseFloat(value),
-): Record<string, number> => {
-  return response.data.result.reduce<Record<string, number>>((result, item) => {
+  options: LabelMapOptions<TStrategy> = {},
+): Record<string, DuplicateValue<number, TStrategy>> => {
+  const duplicate = options.duplicate ?? "last";
+  const result: Record<string, number | number[]> = {};
+
+  for (const item of response.data.result) {
     const labelValue = item.metric[labelName];
-    if (!labelValue) {
-      return result;
+    if (labelValue === undefined) {
+      continue;
     }
+
     const value = parser(item.value[1]);
-    if (!Number.isNaN(value)) {
-      result[labelValue] = value;
+    if (Number.isNaN(value)) {
+      continue;
     }
-    return result;
-  }, {});
+
+    result[labelValue] = applyDuplicateValue(
+      result[labelValue],
+      value,
+      duplicate,
+      labelValue,
+    ) as number | number[];
+  }
+
+  return result as Record<string, DuplicateValue<number, TStrategy>>;
 };
 
-export const mapVector = <T>(
+export const mapVector = <TValue>(
   response: PromSuccessResponse<PromVectorData>,
-  mapper: (item: PromVectorItem) => T | undefined,
-): T[] =>
-  response.data.result.reduce<T[]>((result, item) => {
+  mapper: (item: PromVectorItem) => TValue | undefined,
+): TValue[] => {
+  const result: TValue[] = [];
+  for (const item of response.data.result) {
     const mapped = mapper(item);
     if (mapped !== undefined) {
       result.push(mapped);
     }
-    return result;
-  }, []);
+  }
+  return result;
+};

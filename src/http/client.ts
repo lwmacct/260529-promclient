@@ -1,49 +1,24 @@
-import { PromApiError, PromHttpError, PromParseError } from "./errors";
-import { serializeTime } from "./time";
 import type {
-  PromApiResponse,
   PromBatchOptions,
   PromBatchRequest,
   PromClientOptions,
   PromInstantData,
+  PromMatrixData,
   PromQueryOptions,
   PromRangeQueryOptions,
-  PromMatrixData,
   PromResultData,
   PromSuccessResponse,
-} from "./types";
-
-const defaultMaxGetUrlLength = 2000;
-
-const trimSlash = (value: string): string => value.replace(/\/+$/, "");
-
-const resolveHeaders = async (
-  headers: PromClientOptions["headers"],
-): Promise<HeadersInit | undefined> =>
-  typeof headers === "function" ? headers() : headers;
-
-const appendDefinedParam = (
-  params: URLSearchParams,
-  key: string,
-  value: string | number | undefined,
-) => {
-  if (value !== undefined) {
-    params.set(key, String(value));
-  }
-};
-
-const mergeHeaders = (
-  baseHeaders?: HeadersInit,
-  requestHeaders?: HeadersInit,
-): Headers => {
-  const headers = new Headers(baseHeaders);
-  if (requestHeaders) {
-    new Headers(requestHeaders).forEach((value, key) => {
-      headers.set(key, value);
-    });
-  }
-  return headers;
-};
+} from "../model/index.js";
+import { serializeTime } from "../query/index.js";
+import { PromHttpError } from "./errors.js";
+import { parsePromResponse } from "./response.js";
+import {
+  appendDefinedParam,
+  defaultMaxGetUrlLength,
+  mergeHeaders,
+  resolveHeaders,
+  trimTrailingSlash,
+} from "./request.js";
 
 export class PromClient {
   private readonly baseUrl: string;
@@ -56,7 +31,7 @@ export class PromClient {
       throw new Error("PromClient requires a baseUrl.");
     }
 
-    this.baseUrl = trimSlash(options.baseUrl);
+    this.baseUrl = trimTrailingSlash(options.baseUrl);
     this.fetcher = options.fetcher ?? ((...args) => globalThis.fetch(...args));
     this.headers = options.headers;
     this.maxGetUrlLength = options.maxGetUrlLength ?? defaultMaxGetUrlLength;
@@ -119,7 +94,7 @@ export class PromClient {
     return responses;
   }
 
-  private buildUrl(endpoint: string, params: URLSearchParams): string {
+  private buildGetUrl(endpoint: string, params: URLSearchParams): string {
     return `${this.baseUrl}${endpoint}?${params.toString()}`;
   }
 
@@ -133,49 +108,26 @@ export class PromClient {
   ): Promise<PromSuccessResponse<TData>> {
     const baseHeaders = await resolveHeaders(this.headers);
     const url = `${this.baseUrl}${endpoint}`;
-    const getUrl = this.buildUrl(endpoint, params);
+    const getUrl = this.buildGetUrl(endpoint, params);
     const useGet = getUrl.length <= this.maxGetUrlLength;
     const headers = mergeHeaders(baseHeaders, requestOptions.headers);
     const requestUrl = useGet ? getUrl : url;
 
-    let response: Response;
-    if (useGet) {
-      response = await this.fetcher(requestUrl, {
-        method: "GET",
-        headers,
-        signal: requestOptions.signal,
-      });
-    } else {
+    if (!useGet) {
       headers.set("Content-Type", "application/x-www-form-urlencoded");
-      response = await this.fetcher(requestUrl, {
-        method: "POST",
-        headers,
-        body: params,
-        signal: requestOptions.signal,
-      });
     }
+
+    const response = await this.fetcher(requestUrl, {
+      method: useGet ? "GET" : "POST",
+      headers,
+      body: useGet ? undefined : params,
+      signal: requestOptions.signal,
+    });
 
     if (!response.ok) {
       throw new PromHttpError(response, requestUrl);
     }
 
-    let data: PromApiResponse<TData>;
-    try {
-      data = (await response.json()) as PromApiResponse<TData>;
-    } catch (error) {
-      throw new PromParseError("Failed to parse Prometheus response JSON.", {
-        cause: error,
-      });
-    }
-
-    if (data.status === "error") {
-      throw new PromApiError(data);
-    }
-
-    if (data.status !== "success") {
-      throw new PromParseError("Prometheus response did not include a status.");
-    }
-
-    return data;
+    return parsePromResponse<TData>(response);
   }
 }

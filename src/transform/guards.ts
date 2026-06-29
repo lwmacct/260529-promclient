@@ -9,7 +9,7 @@ import type {
   PromSuccessResponse,
   PromVectorData,
   PromVectorItem,
-} from "../types";
+} from "../model/index.js";
 
 export const isSuccessResponse = <TData extends PromResultData>(
   response: PromApiResponse<TData>,
@@ -32,17 +32,6 @@ export const isVectorItem = (item: PromSeriesItem): item is PromVectorItem =>
 
 export const isMatrixItem = (item: PromSeriesItem): item is PromMatrixItem =>
   "values" in item;
-
-export const safeParseFloat = (
-  value: string | number,
-  defaultValue = 0,
-): number => {
-  const parsed = Number.parseFloat(String(value));
-  return Number.isNaN(parsed) ? defaultValue : parsed;
-};
-
-export const toMilliseconds = (timestampSeconds: number): number =>
-  timestampSeconds * 1000;
 
 export const hasResults = (response: PromSuccessResponse): boolean => {
   const { data } = response;

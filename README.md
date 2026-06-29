@@ -14,6 +14,7 @@ Small Prometheus-compatible HTTP API client with PromQL helpers and response tra
 - 提供 PromQL selector / label matcher 转义工具
 - 提供 vector、matrix、scalar、string 响应转换工具
 - 支持 label 编码 record、字段别名、字段级 value source 和多查询字段合并
+- 支持重复 label / record 字段处理策略：`last`、`first`、`array`、`error`
 - 无运行时依赖
 
 ## 安装
@@ -376,6 +377,19 @@ const rows = mapVectorToRecords(response, {
 });
 ```
 
+使用 `duplicate: "array"` 时，字段从第一个值开始就是数组：
+
+```ts
+const rows = mapVectorToRecords(response, {
+  key: label("asset"),
+  field: label("field"),
+  duplicate: "array",
+  fields: {
+    owner: labelValue("owner", "value"),
+  },
+});
+```
+
 ### Instant Response
 
 ```ts
@@ -398,6 +412,14 @@ import {
 | `mapVectorByLabel(response, labelName, parser?)` | 按指定 label 聚合 vector 数值 |
 | `mapVector(response, mapper)` | 自定义映射 vector items |
 
+`mapVectorByLabel` 支持第四个参数配置重复 label 的处理策略：
+
+```ts
+const values = mapVectorByLabel(response, "instance", undefined, {
+  duplicate: "array",
+});
+```
+
 ### Range Response
 
 ```ts
@@ -415,6 +437,8 @@ import {
 | `mapMatrixItemToSeries(item, parser?)` | 把单条 matrix series 转为 `[timestampMs, value]` 数组 |
 | `mapMatrixToSeries(response, parser?, filter?)` | 把 matrix response 展平为按时间升序排列的点数组 |
 | `mapMatrixByLabel(response, labelName, parser?)` | 按指定 label 输出多条时间序列 |
+
+`mapMatrixByLabel` 同样支持第四个参数配置重复 label 的处理策略。
 
 示例：
 
@@ -475,29 +499,38 @@ try {
 }
 ```
 
-## 子路径导入
+## 导入入口
 
-包提供以下导出入口：
+根入口导出全部公共 API：
 
 ```ts
-import { PromClient } from "@lwmacct/260529-promclient/client";
-import { PromHttpError } from "@lwmacct/260529-promclient/errors";
-import { selector } from "@lwmacct/260529-promclient/promql";
-import { getAdaptiveStep } from "@lwmacct/260529-promclient/time";
-import { mapMatrixByLabel } from "@lwmacct/260529-promclient/transform";
+import {
+  PromClient,
+  PromHttpError,
+  getAdaptiveStep,
+  mapMatrixByLabel,
+  selector,
+} from "@lwmacct/260529-promclient";
 ```
 
-完整入口 `@lwmacct/260529-promclient` 会导出所有公共 API。
+如果只需要响应转换工具，也可以使用唯一保留的子路径入口：
+
+```ts
+import { mapVectorToRecords } from "@lwmacct/260529-promclient/transform";
+```
+
+旧的 `./client`、`./errors`、`./promql`、`./time`、`./types` 子路径入口已移除。
 
 ## 开发
 
 ```bash
 npm install
+npm test
 npm run typecheck
 npm run build
 ```
 
-当前仓库没有测试脚本，发布前至少需要通过类型检查和构建。
+发布前至少需要通过测试、类型检查和构建。
 
 ## 发布
 

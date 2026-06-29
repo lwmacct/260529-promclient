@@ -1,11 +1,11 @@
-import type { PromQueryTime } from "./types";
+import type { PromQueryTime } from "../model/index.js";
 
 export type StepOption = {
   seconds: number;
   value: string;
 };
 
-export const defaultStepOptions: StepOption[] = [
+export const defaultStepOptions: readonly StepOption[] = [
   { seconds: 60, value: "1m" },
   { seconds: 5 * 60, value: "5m" },
   { seconds: 10 * 60, value: "10m" },
