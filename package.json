@@ -1,11 +1,15 @@
 {
   "name": "@lwmacct/260529-promclient",
-  "version": "0.18.260629",
+  "version": "0.19.260802",
   "private": false,
+  "packageManager": "pnpm@11.18.0",
   "description": "Small Prometheus-compatible HTTP API client with PromQL helpers and response transforms.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "engines": {
+    "npm": "please-use-pnpm"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -32,6 +36,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   }
 }

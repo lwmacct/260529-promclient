@@ -12,6 +12,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      PNPM_CONFIG_MINIMUM_RELEASE_AGE: "0"
 
     steps:
       - name: Checkout
@@ -22,21 +24,24 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
 
-      - name: Install
-        run: npm ci
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          cache: true
+          cache_dependency_path: pnpm-lock.yaml
+          run_install: false
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Pack
         run: |
           mkdir -p tmp/npm
-          npm pack --pack-destination tmp/npm
+          pnpm pack --pack-destination tmp/npm
           mv tmp/npm/*.tgz tmp/npm/package.tar.gz
 
       - name: Publish to npm
